@@ -1,0 +1,34 @@
+# Root of project: C:\Users\kunal\OneDrive\Desktop\smart_queue
+# Ignores apply to everything under this folder (backend, mobile, etc.)
+
+# Dependencies
+node_modules/
+
+# Environment & secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build / output
+dist/
+build/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Optional: local notes
+*.local
