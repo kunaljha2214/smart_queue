@@ -4,6 +4,49 @@ const { protect, ownerOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
+const toFiniteNumber = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Enforce storage format:
+ *   "Service Name - 50₹"
+ * even if client sends "Service - ₹50" or "Service - 50$" etc.
+ */
+const formatServiceNameWithPrice = (rawName, price) => {
+  const name = (rawName ?? '').toString().trim();
+  if (!name) return '';
+
+  // Remove any existing " - ..." suffix (old price formats) and trim.
+  const base = name.split(' - ')[0].trim();
+  if (!base) return '';
+
+  // Keep integers if possible, otherwise keep up to 2 decimals.
+  const normalizedPrice = Number.isInteger(price) ? String(price) : String(Number(price.toFixed(2)));
+  return `${base} - ${normalizedPrice}₹`;
+};
+
+const normalizeServices = (input) => {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((s) => {
+      const rawName = (s?.name ?? '').toString().trim();
+      const price = toFiniteNumber(s?.price);
+      const duration = toFiniteNumber(s?.duration);
+      if (!rawName) return null;
+      if (price === null || price <= 0) return null;
+      if (duration === null || duration <= 0) return null;
+
+      return {
+        name: formatServiceNameWithPrice(rawName, price),
+        price,
+        duration,
+      };
+    })
+    .filter(Boolean);
+};
+
 router.get('/', async (req, res) => {
   try {
     const shops = await Shop.find().populate('ownerId', 'name email');
@@ -47,7 +90,7 @@ router.post('/', protect, ownerOnly, async (req, res) => {
       address,
       lat: parseFloat(lat),
       lng: parseFloat(lng),
-      services: services || [],
+      services: normalizeServices(services),
       ownerId: req.user._id
     });
 
@@ -72,7 +115,9 @@ router.put('/:id', protect, ownerOnly, async (req, res) => {
     shop.name = name || shop.name;
     shop.address = address || shop.address;
     shop.location = location || shop.location;
-    shop.services = services || shop.services;
+    if (services) {
+      shop.services = normalizeServices(services);
+    }
 
     await shop.save();
     res.json(shop);
