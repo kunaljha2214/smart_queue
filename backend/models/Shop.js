@@ -26,6 +26,24 @@ const shopSchema = new mongoose.Schema({
     required: true
   },
   services: [serviceSchema],
+  subscription: {
+    isActive: {
+      type: Boolean,
+      default: false
+    },
+    monthlyCharge: {
+      type: Number,
+      default: 300
+    },
+    lastPaidAt: {
+      type: Date,
+      default: null
+    },
+    nextDueAt: {
+      type: Date,
+      default: null
+    }
+  },
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

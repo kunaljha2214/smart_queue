@@ -3,6 +3,14 @@ const Shop = require('../models/Shop');
 const { protect, ownerOnly } = require('../middleware/auth');
 
 const router = express.Router();
+const MONTHLY_CHARGE = 300;
+
+const isShopSubscriptionValid = (shop) => {
+  const isActive = Boolean(shop?.subscription?.isActive);
+  const due = shop?.subscription?.nextDueAt ? new Date(shop.subscription.nextDueAt) : null;
+  if (!isActive || !due) return false;
+  return due.getTime() > Date.now();
+};
 
 const toFiniteNumber = (v) => {
   const n = Number(v);
@@ -50,8 +58,9 @@ const normalizeServices = (input) => {
 router.get('/', async (req, res) => {
   try {
     const shops = await Shop.find().populate('ownerId', 'name email');
+    const visibleShops = shops.filter((shop) => isShopSubscriptionValid(shop));
 
-    const formattedShops = shops.map(shop => ({
+    const formattedShops = visibleShops.map(shop => ({
       ...shop.toObject(),
       location: {
         lat: shop.lat,
@@ -59,6 +68,26 @@ router.get('/', async (req, res) => {
       }
     }));
 
+    res.json(formattedShops);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/mine/list', protect, ownerOnly, async (req, res) => {
+  try {
+    const shops = await Shop.find({ ownerId: req.user._id }).populate('ownerId', 'name email');
+    const formattedShops = shops.map((shop) => ({
+      ...shop.toObject(),
+      location: {
+        lat: shop.lat,
+        lng: shop.lng,
+      },
+      subscription: {
+        ...(shop.subscription || {}),
+        isActive: isShopSubscriptionValid(shop),
+      },
+    }));
     res.json(formattedShops);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -91,10 +120,52 @@ router.post('/', protect, ownerOnly, async (req, res) => {
       lat: parseFloat(lat),
       lng: parseFloat(lng),
       services: normalizeServices(services),
+      subscription: {
+        isActive: false,
+        monthlyCharge: MONTHLY_CHARGE,
+        lastPaidAt: null,
+        nextDueAt: null,
+      },
       ownerId: req.user._id
     });
 
     res.status(201).json(shop);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/:id/pay-subscription', protect, ownerOnly, async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+    if (!shop) {
+      return res.status(404).json({ message: 'Shop not found' });
+    }
+    if (shop.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    const now = new Date();
+    const baseDate =
+      shop.subscription?.nextDueAt && new Date(shop.subscription.nextDueAt) > now
+        ? new Date(shop.subscription.nextDueAt)
+        : now;
+    const nextDueAt = new Date(baseDate.getTime());
+    nextDueAt.setMonth(nextDueAt.getMonth() + 1);
+
+    shop.subscription = {
+      ...(shop.subscription || {}),
+      isActive: true,
+      monthlyCharge: MONTHLY_CHARGE,
+      lastPaidAt: now,
+      nextDueAt,
+    };
+    await shop.save();
+
+    res.json({
+      message: `Subscription paid successfully (₹${MONTHLY_CHARGE})`,
+      subscription: shop.subscription,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
