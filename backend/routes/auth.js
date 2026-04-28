@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const User = require('../models/User');
 
 const router = express.Router();
@@ -10,6 +11,39 @@ const generateToken = (id) => {
 
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const isSmtpConfigured = () =>
+  Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS);
+
+const createTransporter = () =>
+  nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || Number(process.env.SMTP_PORT) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+
+const sendOtpEmail = async ({ to, otp }) => {
+  const transporter = createTransporter();
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  await transporter.sendMail({
+    from,
+    to,
+    subject: 'Smart Queue OTP Verification',
+    text: `Your Smart Queue OTP is ${otp}. It expires in 10 minutes.`,
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2>Smart Queue Verification</h2>
+        <p>Your OTP is:</p>
+        <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">${otp}</p>
+        <p>This OTP expires in <strong>10 minutes</strong>.</p>
+      </div>
+    `,
+  });
 };
 
 router.post('/register', async (req, res) => {
@@ -83,11 +117,17 @@ router.post('/otp/send', async (req, res) => {
     user.otp = { code: otp, expiresAt };
     await user.save();
 
-    res.json({ 
-      message: 'OTP sent successfully',
-      otp: otp,
+    if (!isSmtpConfigured()) {
+      return res.status(500).json({
+        message: 'Email service is not configured. Please set SMTP env variables.',
+      });
+    }
+
+    await sendOtpEmail({ to: email, otp });
+
+    res.json({
+      message: 'OTP sent successfully to your email',
       expiresIn: 600,
-      note: 'For demo: OTP is returned in response. In production, this would be sent to email.'
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
