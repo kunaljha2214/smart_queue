@@ -56,14 +56,18 @@ router.post('/join', protect, async (req, res) => {
     const { shopId, serviceName } = req.body;
     const userId = req.user._id;
 
-    const existingQueue = await Queue.findOne({ 
-      userId, 
-      shopId,
-      status: { $in: ['waiting', 'serving'] }
-    });
-    
+    // Block user from joining another queue while already active in any shop.
+    const existingQueue = await Queue.findOne({
+      userId,
+      status: { $in: ['waiting', 'serving'] },
+    }).populate('shopId', 'name');
+
     if (existingQueue) {
-      return res.status(400).json({ message: 'Already in queue for this shop' });
+      const existingShopName = existingQueue.shopId?.name || 'another shop';
+      return res.status(400).json({
+        message: `You are already in queue at ${existingShopName}`,
+        shopName: existingShopName,
+      });
     }
 
     const shop = await Shop.findById(shopId);
