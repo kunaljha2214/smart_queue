@@ -111,10 +111,24 @@ router.put('/:id', protect, ownerOnly, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
-    const { name, address, location, services } = req.body;
+    const { name, address, lat, lng, location, services } = req.body;
     shop.name = name || shop.name;
     shop.address = address || shop.address;
-    shop.location = location || shop.location;
+    if (lat !== undefined && lat !== null) {
+      const parsedLat = Number(lat);
+      if (Number.isFinite(parsedLat)) shop.lat = parsedLat;
+    }
+    if (lng !== undefined && lng !== null) {
+      const parsedLng = Number(lng);
+      if (Number.isFinite(parsedLng)) shop.lng = parsedLng;
+    }
+    // Backward-compatible fallback if caller sends location object.
+    if (location && typeof location === 'object') {
+      const parsedLat = Number(location.lat);
+      const parsedLng = Number(location.lng);
+      if (Number.isFinite(parsedLat)) shop.lat = parsedLat;
+      if (Number.isFinite(parsedLng)) shop.lng = parsedLng;
+    }
     if (services) {
       shop.services = normalizeServices(services);
     }
