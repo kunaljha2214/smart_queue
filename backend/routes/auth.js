@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const SignupOtp = require('../models/SignupOtp');
 
@@ -157,6 +158,13 @@ router.post('/otp/send', async (req, res) => {
       return res.status(400).json({ message: 'Email is required' });
     }
 
+    if (mongoose.connection.readyState !== 1) {
+      console.error('[otp/send] MongoDB not connected, readyState=', mongoose.connection.readyState);
+      return res.status(503).json({
+        message: 'Database is not ready. Wait a few seconds and try again.',
+      });
+    }
+
     if (!isSmtpConfigured()) {
       return res.status(500).json({
         message:
@@ -167,7 +175,10 @@ router.post('/otp/send', async (req, res) => {
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    if (purpose === 'signup') {
+    const isSignup = purpose === 'signup';
+    console.log('[otp/send] email=%s purpose=%s (signup=%s)', normalizedEmail, purpose || 'existing', isSignup);
+
+    if (isSignup) {
       const existingUser = await User.findOne({ email: normalizedEmail });
       if (existingUser) {
         return res.status(400).json({ message: 'An account with this email already exists. Sign in instead.' });
@@ -190,11 +201,14 @@ router.post('/otp/send', async (req, res) => {
 
     await sendOtpEmail({ to: normalizedEmail, otp });
 
+    console.log('[otp/send] sent ok email=%s purpose=%s', normalizedEmail, purpose || 'existing');
+
     res.json({
       message: 'OTP sent successfully to your email',
       expiresIn: 600,
     });
   } catch (error) {
+    console.error('[otp/send] error:', error.message);
     res.status(500).json({ message: error.message });
   }
 });
@@ -205,6 +219,8 @@ router.post('/otp/verify', async (req, res) => {
     const normalizedEmail = String(email || '')
       .toLowerCase()
       .trim();
+
+    console.log('[otp/verify] email=%s purpose=%s', normalizedEmail, purpose || 'existing');
 
     if (purpose === 'signup') {
       const row = await SignupOtp.findOne({ email: normalizedEmail });
