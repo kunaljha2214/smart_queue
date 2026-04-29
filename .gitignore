@@ -32,3 +32,33 @@ coverage/
 
 # Optional: local notes
 *.local
+
+# -----------------------------------------------------------------------------
+# Mobile (Expo / React Native) — one Git repo at project root only (no nested mobile/.git)
+# -----------------------------------------------------------------------------
+mobile/.git/
+
+# Expo / Metro
+mobile/.expo/
+mobile/web-build/
+mobile/dist/
+mobile/.metro-health-check*
+
+# Android native (mobile/android)
+mobile/android/app/build/
+mobile/android/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/.idea/
+mobile/android/*.iml
+mobile/android/.cxx/
+
+# iOS native (if you add mobile/ios later)
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/ios/*.xcworkspace/xcuserdata/
+mobile/ios/*.xcodeproj/xcuserdata/
+
+# Keystores / signing (never commit)
+mobile/**/*.jks
+mobile/**/*.keystore
