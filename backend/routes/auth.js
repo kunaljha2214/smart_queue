@@ -17,6 +17,8 @@ const generateOTP = () => {
 const isSmtpConfigured = () =>
   Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS);
 
+const SMTP_SEND_MS = 25000;
+
 const createTransporter = () =>
   nodemailer.createTransport({
     host: process.env.SMTP_HOST,
@@ -26,12 +28,15 @@ const createTransporter = () =>
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 15000,
   });
 
 const sendOtpEmail = async ({ to, otp }) => {
   const transporter = createTransporter();
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-  await transporter.sendMail({
+  const mailOptions = {
     from,
     to,
     subject: 'Smart Queue OTP Verification',
@@ -44,7 +49,21 @@ const sendOtpEmail = async ({ to, otp }) => {
         <p>This OTP expires in <strong>10 minutes</strong>.</p>
       </div>
     `,
+  };
+
+  const sendPromise = transporter.sendMail(mailOptions);
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('SMTP send timed out — check SMTP host, port, and firewall.')),
+      SMTP_SEND_MS
+    );
   });
+  try {
+    await Promise.race([sendPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 const generateSignupVerificationToken = (email) =>
@@ -138,6 +157,13 @@ router.post('/otp/send', async (req, res) => {
       return res.status(400).json({ message: 'Email is required' });
     }
 
+    if (!isSmtpConfigured()) {
+      return res.status(500).json({
+        message:
+          'Email service is not configured on the server. Add SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS (e.g. in Render environment variables).',
+      });
+    }
+
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -160,12 +186,6 @@ router.post('/otp/send', async (req, res) => {
 
       user.otp = { code: otp, expiresAt };
       await user.save();
-    }
-
-    if (!isSmtpConfigured()) {
-      return res.status(500).json({
-        message: 'Email service is not configured. Please set SMTP env variables.',
-      });
     }
 
     await sendOtpEmail({ to: normalizedEmail, otp });
