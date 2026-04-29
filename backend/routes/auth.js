@@ -15,6 +15,9 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+const isBrevoConfigured = () => Boolean(process.env.BREVO_API_KEY && process.env.BREVO_FROM_EMAIL);
+const hasAnyBrevoConfig = () =>
+  Boolean(process.env.BREVO_API_KEY || process.env.BREVO_FROM_EMAIL || process.env.BREVO_FROM_NAME);
 const isSmtpConfigured = () =>
   Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS);
 
@@ -35,6 +38,54 @@ const createTransporter = () =>
   });
 
 const sendOtpEmail = async ({ to, otp }) => {
+  if (isBrevoConfigured()) {
+    const fromName = process.env.BREVO_FROM_NAME || 'Smart Queue';
+    const body = {
+      sender: {
+        name: fromName,
+        email: process.env.BREVO_FROM_EMAIL,
+      },
+      to: [{ email: to }],
+      subject: 'Smart Queue OTP Verification',
+      textContent: `Your Smart Queue OTP is ${otp}. It expires in 10 minutes.`,
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+          <h2>Smart Queue Verification</h2>
+          <p>Your OTP is:</p>
+          <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px;">${otp}</p>
+          <p>This OTP expires in <strong>10 minutes</strong>.</p>
+        </div>
+      `,
+    };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SMTP_SEND_MS);
+    try {
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let details = '';
+        try {
+          details = await res.text();
+        } catch {
+          details = '';
+        }
+        throw new Error(`Brevo API failed (${res.status})${details ? `: ${details}` : ''}`);
+      }
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   const transporter = createTransporter();
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
   const mailOptions = {
@@ -165,18 +216,32 @@ router.post('/otp/send', async (req, res) => {
       });
     }
 
-    if (!isSmtpConfigured()) {
+    if (hasAnyBrevoConfig() && !isBrevoConfigured()) {
       return res.status(500).json({
         message:
-          'Email service is not configured on the server. Add SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS (e.g. in Render environment variables).',
+          'Partial Brevo config detected. Please set both BREVO_API_KEY and BREVO_FROM_EMAIL, then redeploy.',
+      });
+    }
+
+    if (!isBrevoConfigured() && !isSmtpConfigured()) {
+      return res.status(500).json({
+        message:
+          'Email service is not configured. Set BREVO_API_KEY + BREVO_FROM_EMAIL or SMTP variables.',
       });
     }
 
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const provider = isBrevoConfigured() ? 'brevo_api' : 'smtp';
 
     const isSignup = purpose === 'signup';
-    console.log('[otp/send] email=%s purpose=%s (signup=%s)', normalizedEmail, purpose || 'existing', isSignup);
+    console.log(
+      '[otp/send] email=%s purpose=%s (signup=%s) provider=%s',
+      normalizedEmail,
+      purpose || 'existing',
+      isSignup,
+      provider
+    );
 
     if (isSignup) {
       const existingUser = await User.findOne({ email: normalizedEmail });
@@ -218,6 +283,7 @@ router.post('/otp/send', async (req, res) => {
       code === 'ECONNECTION' ||
       code === 'EAUTH' ||
       lowered.includes('smtp') ||
+      lowered.includes('brevo') ||
       lowered.includes('timed out') ||
       lowered.includes('connection');
 
