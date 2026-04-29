@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const SignupOtp = require('../models/SignupOtp');
+const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -364,6 +365,42 @@ router.post('/otp/verify', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/push/register', protect, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) {
+      return res.status(400).json({ message: 'Push token is required' });
+    }
+    if (!token.startsWith('ExponentPushToken[')) {
+      return res.status(400).json({ message: 'Invalid Expo push token format' });
+    }
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $addToSet: { expoPushTokens: token } }
+    );
+    return res.json({ message: 'Push token saved' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/push/unregister', protect, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) {
+      return res.status(400).json({ message: 'Push token is required' });
+    }
+    await User.updateOne(
+      { _id: req.user._id },
+      { $pull: { expoPushTokens: token } }
+    );
+    return res.json({ message: 'Push token removed' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 });
 

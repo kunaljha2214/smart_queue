@@ -31,6 +31,10 @@ const userSchema = new mongoose.Schema({
     code: String,
     expiresAt: Date
   },
+  expoPushTokens: {
+    type: [String],
+    default: []
+  },
   createdAt: {
     type: Date,
     default: Date.now

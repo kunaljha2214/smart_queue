@@ -1,6 +1,7 @@
 const express = require('express');
 const Queue = require('../models/Queue');
 const Shop = require('../models/Shop');
+const User = require('../models/User');
 const { protect, ownerOnly } = require('../middleware/auth');
 
 const router = express.Router();
@@ -27,6 +28,80 @@ const calculateEstimatedWait = async (shopId, position) => {
   }
   
   return totalWait;
+};
+
+const sendExpoPush = async (tokens, payload) => {
+  if (!Array.isArray(tokens) || !tokens.length) return;
+  const messages = tokens.map((to) => ({
+    to,
+    sound: 'default',
+    priority: 'high',
+    ...payload,
+  }));
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(messages),
+    });
+  } catch (e) {
+    console.error('[push] failed to send Expo notification:', e.message);
+  }
+};
+
+const formatTurnEta = (estimatedWaitMinutes) => {
+  const mins = Number.isFinite(Number(estimatedWaitMinutes))
+    ? Math.max(0, Math.round(Number(estimatedWaitMinutes)))
+    : 0;
+  const etaDate = new Date(Date.now() + mins * 60 * 1000);
+  const etaTime = etaDate.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return { mins, etaTime };
+};
+
+const notifyTurnSoon = async (queueEntry, shopName) => {
+  if (!queueEntry || queueEntry.position > 2 || queueEntry.turnSoonNotifiedAt) return;
+  const user = await User.findById(queueEntry.userId).select('expoPushTokens');
+  const tokens = (user?.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
+  if (!tokens.length) return;
+  const { mins, etaTime } = formatTurnEta(queueEntry.estimatedWait);
+
+  await sendExpoPush(tokens, {
+    title: 'Your turn is coming soon',
+    body: `Queue #${queueEntry.position} at ${shopName}. Estimated in ${mins} min (around ${etaTime}). Please be available at the shop.`,
+    data: {
+      type: 'queue_turn_soon',
+      shopId: String(queueEntry.shopId),
+      queueId: String(queueEntry._id),
+      position: queueEntry.position,
+    },
+  });
+
+  queueEntry.turnSoonNotifiedAt = new Date();
+  await queueEntry.save();
+};
+
+const refreshWaitingQueueAndNotify = async (shop, baseShopId) => {
+  const waitingQueues = await Queue.find({
+    shopId: baseShopId,
+    status: 'waiting',
+  }).sort({ position: 1 });
+
+  for (let i = 0; i < waitingQueues.length; i++) {
+    const entry = waitingQueues[i];
+    entry.position = i + 1;
+    const estimatedWait = await calculateEstimatedWait(baseShopId, i + 1);
+    entry.estimatedWait = estimatedWait;
+    await entry.save();
+    await notifyTurnSoon(entry, shop?.name || 'your shop');
+  }
+
+  return waitingQueues;
 };
 
 // /my/queue - must come BEFORE /:id to avoid conflict
@@ -96,6 +171,8 @@ router.post('/join', protect, async (req, res) => {
       .populate('userId', 'name email')
       .populate('shopId', 'name address');
 
+    await notifyTurnSoon(queueEntry, shop.name);
+
     req.app.get('io')?.to(`shop:${shopId}`).emit('queue:updated', {
       shopId,
       action: 'joined',
@@ -133,17 +210,8 @@ router.patch('/:id/done', protect, ownerOnly, async (req, res) => {
     queue.status = 'done';
     await queue.save();
 
-    const waitingQueues = await Queue.find({ 
-      shopId: queue.shopId, 
-      status: 'waiting' 
-    }).sort({ position: 1 });
-
-    for (let i = 0; i < waitingQueues.length; i++) {
-      waitingQueues[i].position = i + 1;
-      const estimatedWait = await calculateEstimatedWait(queue.shopId, i + 1);
-      waitingQueues[i].estimatedWait = estimatedWait;
-      await waitingQueues[i].save();
-    }
+    const shop = await Shop.findById(queue.shopId).select('name');
+    const waitingQueues = await refreshWaitingQueueAndNotify(shop, queue.shopId);
 
     req.app.get('io')?.to(`shop:${queue.shopId}`).emit('customer:done', {
       queueId: queue._id,
@@ -180,18 +248,7 @@ router.delete('/owner/remove/:id', protect, ownerOnly, async (req, res) => {
     queue.status = 'cancelled';
     await queue.save();
 
-    const waitingQueues = await Queue.find({ 
-      shopId: queue.shopId,
-      status: 'waiting',
-      position: { $gt: previousPosition }
-    }).sort({ position: 1 });
-
-    for (let i = 0; i < waitingQueues.length; i++) {
-      waitingQueues[i].position = previousPosition + i;
-      const estimatedWait = await calculateEstimatedWait(queue.shopId, previousPosition + i);
-      waitingQueues[i].estimatedWait = estimatedWait;
-      await waitingQueues[i].save();
-    }
+    await refreshWaitingQueueAndNotify(shop, queue.shopId);
 
     req.app.get('io')?.to(`shop:${queue.shopId}`).emit('queue:updated', {
       shopId: queue.shopId,
@@ -232,18 +289,8 @@ router.delete('/:id', protect, async (req, res) => {
     queue.status = 'cancelled';
     await queue.save();
 
-    const waitingQueues = await Queue.find({ 
-      shopId: queue.shopId,
-      status: 'waiting',
-      position: { $gt: previousPosition }
-    }).sort({ position: 1 });
-
-    for (let i = 0; i < waitingQueues.length; i++) {
-      waitingQueues[i].position = previousPosition + i;
-      const estimatedWait = await calculateEstimatedWait(queue.shopId, previousPosition + i);
-      waitingQueues[i].estimatedWait = estimatedWait;
-      await waitingQueues[i].save();
-    }
+    const shop = await Shop.findById(queue.shopId).select('name');
+    await refreshWaitingQueueAndNotify(shop, queue.shopId);
 
     req.app.get('io')?.to(`shop:${queue.shopId}`).emit('queue:updated', {
       shopId: queue.shopId,

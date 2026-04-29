@@ -28,6 +28,10 @@ const queueSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  turnSoonNotifiedAt: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
