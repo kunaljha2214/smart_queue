@@ -29,6 +29,11 @@ app.use(cors());
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
+/** Wakes the Render instance quickly without DB/SMTP — call from the app before OTP */
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, t: Date.now() });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/shops', shopRoutes);
 app.use('/api/queue', queueRoutes);
