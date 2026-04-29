@@ -42,6 +42,22 @@ const shopSchema = new mongoose.Schema({
     nextDueAt: {
       type: Date,
       default: null
+    },
+    lastPaymentId: {
+      type: String,
+      default: null
+    },
+    lastPaymentStatus: {
+      type: String,
+      default: null
+    },
+    pendingPaymentLinkId: {
+      type: String,
+      default: null
+    },
+    pendingPaymentLinkUrl: {
+      type: String,
+      default: null
     }
   },
   ownerId: {

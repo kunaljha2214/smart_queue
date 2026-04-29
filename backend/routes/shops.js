@@ -1,15 +1,26 @@
 const express = require('express');
 const Shop = require('../models/Shop');
 const { protect, ownerOnly } = require('../middleware/auth');
+const Razorpay = require('razorpay');
 
 const router = express.Router();
 const MONTHLY_CHARGE = 300;
+const RAZORPAY_AMOUNT_PAISE = MONTHLY_CHARGE * 100;
 
 const isShopSubscriptionValid = (shop) => {
   const isActive = Boolean(shop?.subscription?.isActive);
   const due = shop?.subscription?.nextDueAt ? new Date(shop.subscription.nextDueAt) : null;
   if (!isActive || !due) return false;
   return due.getTime() > Date.now();
+};
+
+const getRazorpayClient = () => {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret) {
+    throw new Error('Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
+  }
+  return new Razorpay({ key_id: keyId, key_secret: keySecret });
 };
 
 const toFiniteNumber = (v) => {
@@ -94,6 +105,83 @@ router.get('/mine/list', protect, ownerOnly, async (req, res) => {
   }
 });
 
+router.get('/:id/subscription/status', protect, ownerOnly, async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+    if (!shop) {
+      return res.status(404).json({ message: 'Shop not found' });
+    }
+    if (shop.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    res.json({
+      isActive: isShopSubscriptionValid(shop),
+      monthlyCharge: shop.subscription?.monthlyCharge || MONTHLY_CHARGE,
+      lastPaidAt: shop.subscription?.lastPaidAt || null,
+      nextDueAt: shop.subscription?.nextDueAt || null,
+      lastPaymentId: shop.subscription?.lastPaymentId || null,
+      lastPaymentStatus: shop.subscription?.lastPaymentStatus || null,
+      pendingPaymentLinkId: shop.subscription?.pendingPaymentLinkId || null,
+      pendingPaymentLinkUrl: shop.subscription?.pendingPaymentLinkUrl || null,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/:id/subscription/create-payment-link', protect, ownerOnly, async (req, res) => {
+  try {
+    const shop = await Shop.findById(req.params.id);
+    if (!shop) {
+      return res.status(404).json({ message: 'Shop not found' });
+    }
+    if (shop.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    const razorpay = getRazorpayClient();
+    const paymentLink = await razorpay.paymentLink.create({
+      amount: RAZORPAY_AMOUNT_PAISE,
+      currency: 'INR',
+      accept_partial: false,
+      description: `Smart Queue monthly subscription for ${shop.name}`,
+      customer: {
+        name: req.user.name || 'Shop Owner',
+        email: req.user.email,
+      },
+      notify: {
+        sms: false,
+        email: true,
+      },
+      notes: {
+        shopId: shop._id.toString(),
+        ownerId: req.user._id.toString(),
+        plan: 'monthly_300',
+      },
+    });
+
+    shop.subscription = {
+      ...(shop.subscription || {}),
+      monthlyCharge: MONTHLY_CHARGE,
+      pendingPaymentLinkId: paymentLink.id,
+      pendingPaymentLinkUrl: paymentLink.short_url || paymentLink.url || null,
+      lastPaymentStatus: 'created',
+    };
+    await shop.save();
+
+    res.json({
+      message: 'Payment link created',
+      paymentLinkId: paymentLink.id,
+      paymentLinkUrl: paymentLink.short_url || paymentLink.url,
+      amount: MONTHLY_CHARGE,
+      currency: 'INR',
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const shop = await Shop.findById(req.params.id).populate('ownerId', 'name email');
@@ -136,39 +224,9 @@ router.post('/', protect, ownerOnly, async (req, res) => {
 });
 
 router.post('/:id/pay-subscription', protect, ownerOnly, async (req, res) => {
-  try {
-    const shop = await Shop.findById(req.params.id);
-    if (!shop) {
-      return res.status(404).json({ message: 'Shop not found' });
-    }
-    if (shop.ownerId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized' });
-    }
-
-    const now = new Date();
-    const baseDate =
-      shop.subscription?.nextDueAt && new Date(shop.subscription.nextDueAt) > now
-        ? new Date(shop.subscription.nextDueAt)
-        : now;
-    const nextDueAt = new Date(baseDate.getTime());
-    nextDueAt.setMonth(nextDueAt.getMonth() + 1);
-
-    shop.subscription = {
-      ...(shop.subscription || {}),
-      isActive: true,
-      monthlyCharge: MONTHLY_CHARGE,
-      lastPaidAt: now,
-      nextDueAt,
-    };
-    await shop.save();
-
-    res.json({
-      message: `Subscription paid successfully (₹${MONTHLY_CHARGE})`,
-      subscription: shop.subscription,
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  return res.status(410).json({
+    message: 'Legacy endpoint removed. Use /subscription/create-payment-link for real payment.',
+  });
 });
 
 router.put('/:id', protect, ownerOnly, async (req, res) => {

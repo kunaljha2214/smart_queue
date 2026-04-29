@@ -7,6 +7,7 @@ const connectDB = require('./config/db');
 const authRoutes = require('./routes/auth');
 const shopRoutes = require('./routes/shops');
 const queueRoutes = require('./routes/queue');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,11 +22,13 @@ const io = new Server(server, {
 connectDB();
 
 app.use(cors());
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
 app.use('/api/shops', shopRoutes);
 app.use('/api/queue', queueRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.set('io', io);
 
