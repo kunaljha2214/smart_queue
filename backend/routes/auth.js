@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const User = require('../models/User');
+const SignupOtp = require('../models/SignupOtp');
 
 const router = express.Router();
 
@@ -46,9 +47,33 @@ const sendOtpEmail = async ({ to, otp }) => {
   });
 };
 
+const generateSignupVerificationToken = (email) =>
+  jwt.sign({ email: email.toLowerCase().trim(), scope: 'signup' }, process.env.JWT_SECRET, {
+    expiresIn: '30m',
+  });
+
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, phone, role } = req.body;
+    const { name, email, password, phone, role, emailVerificationToken } = req.body;
+
+    if (!emailVerificationToken) {
+      return res.status(400).json({
+        message: 'Email verification required. Verify your email with OTP before creating an account.',
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(emailVerificationToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(400).json({
+        message: 'Invalid or expired email verification. Request a new OTP from the signup screen.',
+      });
+    }
+
+    if (decoded.scope !== 'signup' || decoded.email !== String(email).toLowerCase().trim()) {
+      return res.status(400).json({ message: 'Email verification does not match this signup.' });
+    }
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -104,18 +129,38 @@ router.post('/login', async (req, res) => {
 
 router.post('/otp/send', async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, purpose } = req.body;
+    const normalizedEmail = String(email || '')
+      .toLowerCase()
+      .trim();
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required' });
     }
 
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    user.otp = { code: otp, expiresAt };
-    await user.save();
+    if (purpose === 'signup') {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (existingUser) {
+        return res.status(400).json({ message: 'An account with this email already exists. Sign in instead.' });
+      }
+
+      await SignupOtp.findOneAndUpdate(
+        { email: normalizedEmail },
+        { email: normalizedEmail, code: otp, expiresAt },
+        { upsert: true, new: true }
+      );
+    } else {
+      const user = await User.findOne({ email: normalizedEmail });
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      user.otp = { code: otp, expiresAt };
+      await user.save();
+    }
 
     if (!isSmtpConfigured()) {
       return res.status(500).json({
@@ -123,7 +168,7 @@ router.post('/otp/send', async (req, res) => {
       });
     }
 
-    await sendOtpEmail({ to: email, otp });
+    await sendOtpEmail({ to: normalizedEmail, otp });
 
     res.json({
       message: 'OTP sent successfully to your email',
@@ -136,9 +181,35 @@ router.post('/otp/send', async (req, res) => {
 
 router.post('/otp/verify', async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp, purpose } = req.body;
+    const normalizedEmail = String(email || '')
+      .toLowerCase()
+      .trim();
 
-    const user = await User.findOne({ email });
+    if (purpose === 'signup') {
+      const row = await SignupOtp.findOne({ email: normalizedEmail });
+      if (!row || !row.code) {
+        return res.status(400).json({ message: 'No OTP requested for this email' });
+      }
+      if (new Date() > row.expiresAt) {
+        await SignupOtp.deleteOne({ email: normalizedEmail });
+        return res.status(400).json({ message: 'OTP expired' });
+      }
+      if (row.code !== otp) {
+        return res.status(400).json({ message: 'Invalid OTP' });
+      }
+
+      await SignupOtp.deleteOne({ email: normalizedEmail });
+
+      const emailVerificationToken = generateSignupVerificationToken(normalizedEmail);
+
+      return res.json({
+        message: 'Email verified. You can create your account.',
+        emailVerificationToken,
+      });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -160,15 +231,15 @@ router.post('/otp/verify', async (req, res) => {
 
     const token = generateToken(user._id);
 
-    res.json({ 
+    res.json({
       message: 'OTP verified successfully',
       token,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role
-      }
+        role: user.role,
+      },
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
