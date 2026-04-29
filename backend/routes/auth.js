@@ -18,7 +18,7 @@ const generateOTP = () => {
 const isSmtpConfigured = () =>
   Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS);
 
-const SMTP_SEND_MS = 25000;
+const SMTP_SEND_MS = 60000;
 
 const createTransporter = () =>
   nodemailer.createTransport({
@@ -29,9 +29,9 @@ const createTransporter = () =>
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 15000,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 60000,
   });
 
 const sendOtpEmail = async ({ to, otp }) => {
@@ -208,8 +208,27 @@ router.post('/otp/send', async (req, res) => {
       expiresIn: 600,
     });
   } catch (error) {
-    console.error('[otp/send] error:', error.message);
-    res.status(500).json({ message: error.message });
+    const msg = String(error?.message || 'Failed to send OTP email');
+    const code = String(error?.code || '');
+    console.error('[otp/send] error:', msg, code ? `(code=${code})` : '');
+
+    const lowered = msg.toLowerCase();
+    const smtpLikeError =
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNECTION' ||
+      code === 'EAUTH' ||
+      lowered.includes('smtp') ||
+      lowered.includes('timed out') ||
+      lowered.includes('connection');
+
+    if (smtpLikeError) {
+      return res.status(502).json({
+        message:
+          'Email provider is temporarily unavailable. Please try again in a minute. If it continues, verify SMTP credentials and app password.',
+      });
+    }
+
+    res.status(500).json({ message: msg });
   }
 });
 
