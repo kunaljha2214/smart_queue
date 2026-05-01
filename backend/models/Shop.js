@@ -60,6 +60,11 @@ const shopSchema = new mongoose.Schema({
       default: null
     }
   },
+  /** When false, shop is hidden from customer lists and queue joins are blocked. */
+  isOpen: {
+    type: Boolean,
+    default: true,
+  },
   ownerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

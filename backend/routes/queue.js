@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { protect, ownerOnly } = require('../middleware/auth');
 
 const router = express.Router();
+const { isShopSubscriptionValid } = require('../utils/shopVisibility');
 
 const calculatePosition = async (shopId) => {
   const lastInQueue = await Queue.findOne({ shopId, status: 'waiting' })
@@ -148,6 +149,17 @@ router.post('/join', protect, async (req, res) => {
     const shop = await Shop.findById(shopId);
     if (!shop) {
       return res.status(404).json({ message: 'Shop not found' });
+    }
+
+    if (shop.isOpen === false) {
+      return res.status(400).json({
+        message: 'This shop is currently closed and not accepting queue joins.',
+      });
+    }
+    if (!isShopSubscriptionValid(shop)) {
+      return res.status(400).json({
+        message: 'This shop subscription is inactive. Please try another shop.',
+      });
     }
 
     const service = shop.services.find(s => s.name === serviceName);

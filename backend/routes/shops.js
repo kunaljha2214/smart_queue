@@ -7,12 +7,10 @@ const router = express.Router();
 const MONTHLY_CHARGE = 300;
 const RAZORPAY_AMOUNT_PAISE = MONTHLY_CHARGE * 100;
 
-const isShopSubscriptionValid = (shop) => {
-  const isActive = Boolean(shop?.subscription?.isActive);
-  const due = shop?.subscription?.nextDueAt ? new Date(shop.subscription.nextDueAt) : null;
-  if (!isActive || !due) return false;
-  return due.getTime() > Date.now();
-};
+const {
+  isShopSubscriptionValid,
+  isShopVisibleToCustomers,
+} = require('../utils/shopVisibility');
 
 const getRazorpayClient = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
@@ -69,7 +67,7 @@ const normalizeServices = (input) => {
 router.get('/', async (req, res) => {
   try {
     const shops = await Shop.find().populate('ownerId', 'name email');
-    const visibleShops = shops.filter((shop) => isShopSubscriptionValid(shop));
+    const visibleShops = shops.filter((shop) => isShopVisibleToCustomers(shop));
 
     const formattedShops = visibleShops.map(shop => ({
       ...shop.toObject(),
@@ -188,6 +186,12 @@ router.get('/:id', async (req, res) => {
     if (!shop) {
       return res.status(404).json({ message: 'Shop not found' });
     }
+    if (!isShopVisibleToCustomers(shop)) {
+      return res.status(404).json({
+        message: 'Shop is not available',
+        code: 'SHOP_UNAVAILABLE',
+      });
+    }
     res.json(shop);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -240,9 +244,12 @@ router.put('/:id', protect, ownerOnly, async (req, res) => {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
-    const { name, address, lat, lng, location, services } = req.body;
+    const { name, address, lat, lng, location, services, isOpen } = req.body;
     shop.name = name || shop.name;
     shop.address = address || shop.address;
+    if (isOpen !== undefined) {
+      shop.isOpen = Boolean(isOpen);
+    }
     if (lat !== undefined && lat !== null) {
       const parsedLat = Number(lat);
       if (Number.isFinite(parsedLat)) shop.lat = parsedLat;
