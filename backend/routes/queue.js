@@ -115,7 +115,14 @@ router.get('/my/queue', protect, async (req, res) => {
       status: { $in: ['waiting', 'serving'] }
     })
       .populate('userId', 'name email')
-      .populate('shopId', 'name address services location');
+      .populate({
+        path: 'shopId',
+        select: 'name address lat lng services ownerId',
+        populate: {
+          path: 'ownerId',
+          select: 'name phone email',
+        },
+      });
 
     if (!myQueue) {
       return res.status(404).json({ message: 'No active queue' });
