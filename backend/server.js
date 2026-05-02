@@ -12,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const shopRoutes = require('./routes/shops');
 const queueRoutes = require('./routes/queue');
 const paymentRoutes = require('./routes/payments');
+const adsRoutes = require('./routes/ads');
 
 const app = express();
 const server = http.createServer(app);
@@ -38,6 +39,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/shops', shopRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/ads', adsRoutes);
 
 app.set('io', io);
 
