@@ -67,6 +67,7 @@ const formatTurnEta = (estimatedWaitMinutes) => {
 
 const notifyTurnSoon = async (queueEntry, shopName) => {
   if (!queueEntry || queueEntry.position > 2 || queueEntry.turnSoonNotifiedAt) return;
+  if (!queueEntry.userId || queueEntry.isWalkIn) return;
   const user = await User.findById(queueEntry.userId).select('expoPushTokens');
   const tokens = (user?.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
   if (!tokens.length) return;
@@ -204,6 +205,115 @@ router.post('/join', protect, async (req, res) => {
   }
 });
 
+const resolveShopServiceByName = (shop, serviceName) => {
+  if (!serviceName || typeof serviceName !== 'string') return null;
+  const t = serviceName.trim();
+  return shop.services.find((s) => (s.name || '').trim() === t) || null;
+};
+
+/**
+ * Owner adds offline walk-in customers to the end of the waiting line.
+ * Each walk-in gets a unique walkInRef (W-1, W-2, …) and a shop service (duration from shop).
+ * Body: { shopId, entries: [{ serviceName }] } OR { shopId, count, serviceName }
+ */
+router.post('/walk-in', protect, ownerOnly, async (req, res) => {
+  try {
+    const { shopId, count, serviceName, entries } = req.body;
+    const shop = await Shop.findById(shopId);
+    if (!shop) {
+      return res.status(404).json({ message: 'Shop not found' });
+    }
+    if (shop.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+    if (!Array.isArray(shop.services) || shop.services.length === 0) {
+      return res.status(400).json({ message: 'Shop has no services configured' });
+    }
+
+    let plannedServiceNames = [];
+
+    if (Array.isArray(entries) && entries.length > 0) {
+      if (entries.length > 50) {
+        return res.status(400).json({ message: 'Maximum 50 walk-ins per request' });
+      }
+      plannedServiceNames = entries.map((e) => {
+        if (typeof e === 'string') return e.trim();
+        return (e && e.serviceName) ? String(e.serviceName).trim() : '';
+      }).filter(Boolean);
+
+      if (plannedServiceNames.length !== entries.length) {
+        return res.status(400).json({ message: 'Each entry must include serviceName' });
+      }
+    } else {
+      const rawCount = Number(count);
+      const n = Math.min(50, Math.max(1, Number.isFinite(rawCount) ? Math.floor(rawCount) : 0));
+      const svcName = typeof serviceName === 'string' ? serviceName.trim() : '';
+      if (!shopId || !n || !svcName) {
+        return res.status(400).json({
+          message: 'Send entries: [{ serviceName }] or count plus serviceName',
+        });
+      }
+      if (!resolveShopServiceByName(shop, svcName)) {
+        return res.status(400).json({ message: `Unknown service: ${svcName}` });
+      }
+      plannedServiceNames = Array(n).fill(svcName);
+    }
+
+    for (const svcName of plannedServiceNames) {
+      const svc = resolveShopServiceByName(shop, svcName);
+      if (!svc) {
+        return res.status(400).json({ message: `Unknown service: ${svcName}` });
+      }
+
+      const shopTick = await Shop.findByIdAndUpdate(
+        shopId,
+        { $inc: { walkInSeq: 1 } },
+        { new: true, select: 'walkInSeq name' }
+      );
+
+      const walkInRef = `W-${shopTick.walkInSeq}`;
+      const position = await calculatePosition(shopId);
+      const estimatedWait = await calculateEstimatedWait(shopId, position);
+
+      await Queue.create({
+        shopId,
+        userId: null,
+        isWalkIn: true,
+        walkInRef,
+        service: { name: svc.name, duration: svc.duration },
+        position,
+        estimatedWait,
+        status: 'waiting',
+      });
+    }
+
+    const shopDoc = await Shop.findById(shopId).select('name');
+    await refreshWaitingQueueAndNotify(shopDoc, shopId);
+
+    const populated = await Queue.find({
+      shopId,
+      status: { $in: ['waiting', 'serving'] },
+    })
+      .sort({ position: 1 })
+      .populate('userId', 'name email')
+      .populate('shopId', 'name address');
+
+    req.app.get('io')?.to(`shop:${shopId}`).emit('queue:updated', {
+      shopId,
+      action: 'walk_in_added',
+      queues: populated,
+    });
+
+    res.status(201).json({
+      message: `Added ${plannedServiceNames.length} walk-in slot(s) to the queue`,
+      added: plannedServiceNames.length,
+      queues: populated,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.get('/:shopId', async (req, res) => {
   try {
     const { shopId } = req.params;
@@ -275,11 +385,13 @@ router.delete('/owner/remove/:id', protect, ownerOnly, async (req, res) => {
       removedByOwner: true
     });
 
-    req.app.get('io')?.to(`user:${userId}`).emit('removed:byOwner', {
-      shopId: queue.shopId,
-      shopName: shop.name,
-      message: 'You have been removed from the queue by the owner'
-    });
+    if (userId) {
+      req.app.get('io')?.to(`user:${userId}`).emit('removed:byOwner', {
+        shopId: queue.shopId,
+        shopName: shop.name,
+        message: 'You have been removed from the queue by the owner'
+      });
+    }
 
     res.json({ message: 'Customer removed successfully' });
   } catch (error) {
@@ -294,12 +406,14 @@ router.delete('/:id', protect, async (req, res) => {
       return res.status(404).json({ message: 'Queue entry not found' });
     }
 
-    const queueUserId = (queue.userId && queue.userId._id ? queue.userId._id : queue.userId).toString();
+    const rawQueueUser = queue.userId && queue.userId._id ? queue.userId._id : queue.userId;
+    const queueUserId = rawQueueUser ? String(rawQueueUser) : null;
     const reqUserId = req.user._id.toString();
+    const isOwnEntry = queueUserId && queueUserId === reqUserId;
 
-    if (queueUserId !== reqUserId) {
-      const shop = await Shop.findById(queue.shopId);
-      if (!shop || shop.ownerId.toString() !== reqUserId) {
+    if (!isOwnEntry) {
+      const shopAuth = await Shop.findById(queue.shopId);
+      if (!shopAuth || shopAuth.ownerId.toString() !== reqUserId) {
         return res.status(403).json({ message: 'Not authorized' });
       }
     }

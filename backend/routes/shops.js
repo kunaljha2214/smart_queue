@@ -1,5 +1,6 @@
 const express = require('express');
 const Shop = require('../models/Shop');
+const Queue = require('../models/Queue');
 const { protect, ownerOnly } = require('../middleware/auth');
 const Razorpay = require('razorpay');
 
@@ -69,12 +70,35 @@ router.get('/', async (req, res) => {
     const shops = await Shop.find().populate('ownerId', 'name email');
     const visibleShops = shops.filter((shop) => isShopVisibleToCustomers(shop));
 
-    const formattedShops = visibleShops.map(shop => ({
+    const shopIds = visibleShops.map((s) => s._id);
+    let waitingCountByShop = {};
+    if (shopIds.length) {
+      const counts = await Queue.aggregate([
+        {
+          $match: {
+            shopId: { $in: shopIds },
+            status: 'waiting',
+          },
+        },
+        {
+          $group: {
+            _id: '$shopId',
+            waitingCount: { $sum: 1 },
+          },
+        },
+      ]);
+      waitingCountByShop = Object.fromEntries(
+        counts.map((c) => [String(c._id), c.waitingCount])
+      );
+    }
+
+    const formattedShops = visibleShops.map((shop) => ({
       ...shop.toObject(),
       location: {
         lat: shop.lat,
-        lng: shop.lng
-      }
+        lng: shop.lng,
+      },
+      waitingCount: waitingCountByShop[String(shop._id)] || 0,
     }));
 
     res.json(formattedShops);

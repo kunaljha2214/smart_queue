@@ -9,7 +9,17 @@ const queueSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    default: null,
+  },
+  /** In-shop customers not using the app; no user account. */
+  isWalkIn: {
+    type: Boolean,
+    default: false,
+  },
+  /** Stable display ID for walk-ins only (e.g. W-12); assigned by backend. */
+  walkInRef: {
+    type: String,
+    default: null,
   },
   service: {
     name: { type: String, required: true },

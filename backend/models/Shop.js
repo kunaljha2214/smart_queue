@@ -60,6 +60,11 @@ const shopSchema = new mongoose.Schema({
       default: null
     }
   },
+  /** Increments for each walk-in to build unique walk-in IDs (W-1, W-2, …). */
+  walkInSeq: {
+    type: Number,
+    default: 0,
+  },
   /** When false, shop is hidden from customer lists and queue joins are blocked. */
   isOpen: {
     type: Boolean,
