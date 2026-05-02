@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const SignupOtp = require('../models/SignupOtp');
-const { protect } = require('../middleware/auth');
+const { protect, userOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -399,6 +399,33 @@ router.post('/push/unregister', protect, async (req, res) => {
       { $pull: { expoPushTokens: token } }
     );
     return res.json({ message: 'Push token removed' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+/** FCM device token (Android). Customers only — used for queue position ≤ 2 alerts. */
+router.post('/fcm/register', protect, userOnly, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token || token.length < 32) {
+      return res.status(400).json({ message: 'Valid FCM device token is required' });
+    }
+    await User.updateOne({ _id: req.user._id }, { $addToSet: { fcmTokens: token } });
+    return res.json({ message: 'FCM token saved' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/fcm/unregister', protect, userOnly, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) {
+      return res.status(400).json({ message: 'FCM token is required' });
+    }
+    await User.updateOne({ _id: req.user._id }, { $pull: { fcmTokens: token } });
+    return res.json({ message: 'FCM token removed' });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

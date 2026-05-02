@@ -3,6 +3,7 @@ const Queue = require('../models/Queue');
 const Shop = require('../models/Shop');
 const User = require('../models/User');
 const { protect, ownerOnly } = require('../middleware/auth');
+const { sendFcmDataAndNotification } = require('../services/fcm');
 
 const router = express.Router();
 const { isShopSubscriptionValid } = require('../utils/shopVisibility');
@@ -68,21 +69,34 @@ const formatTurnEta = (estimatedWaitMinutes) => {
 const notifyTurnSoon = async (queueEntry, shopName) => {
   if (!queueEntry || queueEntry.position > 2 || queueEntry.turnSoonNotifiedAt) return;
   if (!queueEntry.userId || queueEntry.isWalkIn) return;
-  const user = await User.findById(queueEntry.userId).select('expoPushTokens');
-  const tokens = (user?.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
-  if (!tokens.length) return;
-  const { mins, etaTime } = formatTurnEta(queueEntry.estimatedWait);
+  const user = await User.findById(queueEntry.userId).select('expoPushTokens fcmTokens role');
+  if (!user || user.role !== 'user') return;
 
-  await sendExpoPush(tokens, {
-    title: 'Your turn is coming soon',
-    body: `Queue #${queueEntry.position} at ${shopName}. Estimated in ${mins} min (around ${etaTime}). Please be available at the shop.`,
-    data: {
-      type: 'queue_turn_soon',
-      shopId: String(queueEntry.shopId),
-      queueId: String(queueEntry._id),
-      position: queueEntry.position,
-    },
-  });
+  const { mins, etaTime } = formatTurnEta(queueEntry.estimatedWait);
+  const title = 'Your turn is coming soon';
+  const body = `Queue #${queueEntry.position} at ${shopName}. Estimated in ${mins} min (around ${etaTime}). Please be available at the shop.`;
+  const data = {
+    type: 'queue_turn_soon',
+    shopId: String(queueEntry.shopId),
+    queueId: String(queueEntry._id),
+    position: String(queueEntry.position),
+  };
+
+  const fcmTokens = (user.fcmTokens || []).map((t) => String(t).trim()).filter(Boolean);
+  if (fcmTokens.length) {
+    await sendFcmDataAndNotification(fcmTokens, { title, body, data });
+  } else {
+    const expoTokens = (user.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
+    if (!expoTokens.length) return;
+    await sendExpoPush(expoTokens, {
+      title,
+      body,
+      data: {
+        ...data,
+        position: queueEntry.position,
+      },
+    });
+  }
 
   queueEntry.turnSoonNotifiedAt = new Date();
   await queueEntry.save();

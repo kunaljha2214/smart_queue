@@ -35,6 +35,11 @@ const userSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  /** FCM device tokens (Android native); used for queue "turn soon" pushes. */
+  fcmTokens: {
+    type: [String],
+    default: []
+  },
   createdAt: {
     type: Date,
     default: Date.now
