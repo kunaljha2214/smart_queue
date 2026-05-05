@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const SignupOtp = require('../models/SignupOtp');
-const { protect, userOnly } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -404,8 +404,8 @@ router.post('/push/unregister', protect, async (req, res) => {
   }
 });
 
-/** FCM device token (Android). Customers only — used for queue position ≤ 2 alerts. */
-router.post('/fcm/register', protect, userOnly, async (req, res) => {
+/** FCM device token (Android). Customers and owners — join alerts, turn-soon, etc. */
+router.post('/fcm/register', protect, async (req, res) => {
   try {
     const token = String(req.body?.token || '').trim();
     if (!token || token.length < 32) {
@@ -418,7 +418,7 @@ router.post('/fcm/register', protect, userOnly, async (req, res) => {
   }
 });
 
-router.post('/fcm/unregister', protect, userOnly, async (req, res) => {
+router.post('/fcm/unregister', protect, async (req, res) => {
   try {
     const token = String(req.body?.token || '').trim();
     if (!token) {

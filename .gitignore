@@ -62,3 +62,8 @@ mobile/ios/*.xcodeproj/xcuserdata/
 # Keystores / signing (never commit)
 mobile/**/*.jks
 mobile/**/*.keystore
+
+# Firebase / FCM (never commit)
+mobile/google-services.json
+mobile/android/app/google-services.json
+**/*firebase-adminsdk*.json

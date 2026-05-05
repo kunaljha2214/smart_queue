@@ -53,6 +53,24 @@ const sendExpoPush = async (tokens, payload) => {
   }
 };
 
+/** FCM if available, otherwise Expo push tokens */
+const sendPushToUser = async (user, { title, body, data = {} }) => {
+  if (!user) return;
+  const dataStr = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined || v === null) continue;
+    dataStr[String(k)] = String(v);
+  }
+  const fcmTokens = (user.fcmTokens || []).map((t) => String(t).trim()).filter(Boolean);
+  if (fcmTokens.length) {
+    await sendFcmDataAndNotification(fcmTokens, { title, body, data: dataStr });
+    return;
+  }
+  const expoTokens = (user.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
+  if (!expoTokens.length) return;
+  await sendExpoPush(expoTokens, { title, body, data: dataStr });
+};
+
 const formatTurnEta = (estimatedWaitMinutes) => {
   const mins = Number.isFinite(Number(estimatedWaitMinutes))
     ? Math.max(0, Math.round(Number(estimatedWaitMinutes)))
@@ -82,21 +100,7 @@ const notifyTurnSoon = async (queueEntry, shopName) => {
     position: String(queueEntry.position),
   };
 
-  const fcmTokens = (user.fcmTokens || []).map((t) => String(t).trim()).filter(Boolean);
-  if (fcmTokens.length) {
-    await sendFcmDataAndNotification(fcmTokens, { title, body, data });
-  } else {
-    const expoTokens = (user.expoPushTokens || []).filter((t) => t?.startsWith('ExponentPushToken['));
-    if (!expoTokens.length) return;
-    await sendExpoPush(expoTokens, {
-      title,
-      body,
-      data: {
-        ...data,
-        position: queueEntry.position,
-      },
-    });
-  }
+  await sendPushToUser(user, { title, body, data });
 
   queueEntry.turnSoonNotifiedAt = new Date();
   await queueEntry.save();
@@ -204,6 +208,47 @@ router.post('/join', protect, async (req, res) => {
     const populatedQueue = await Queue.findById(queueEntry._id)
       .populate('userId', 'name email')
       .populate('shopId', 'name address');
+
+    const joiner = await User.findById(userId).select('name expoPushTokens fcmTokens');
+    const customerName = (
+      joiner?.name ||
+      populatedQueue.userId?.name ||
+      'A customer'
+    )
+      .toString()
+      .trim() || 'A customer';
+    const waitMins = Number.isFinite(Number(estimatedWait))
+      ? Math.max(0, Math.round(Number(estimatedWait)))
+      : 0;
+
+    await sendPushToUser(joiner, {
+      title: "You're in the queue",
+      body: `${shop.name}: #${position} · est. wait ~${waitMins} min`,
+      data: {
+        type: 'queue_joined',
+        shopId: String(shopId),
+        queueId: String(queueEntry._id),
+        position: String(position),
+        estimatedWait: String(waitMins),
+      },
+    });
+
+    const owner = shop.ownerId
+      ? await User.findById(shop.ownerId).select('expoPushTokens fcmTokens role')
+      : null;
+    if (owner && owner.role === 'owner') {
+      await sendPushToUser(owner, {
+        title: 'New queue join',
+        body: `${customerName} joined ${shop.name} · #${position}`,
+        data: {
+          type: 'queue_new_join',
+          shopId: String(shopId),
+          queueId: String(queueEntry._id),
+          position: String(position),
+          customerName,
+        },
+      });
+    }
 
     await notifyTurnSoon(queueEntry, shop.name);
 
