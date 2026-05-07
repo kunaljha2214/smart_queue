@@ -26,13 +26,22 @@ const getMessaging = () => {
   return admin.messaging();
 };
 
+const getFcmInitStatus = () => {
+  const hasServiceAccountEnv = Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  const hasGoogleAppCreds = Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  const initialized = Boolean(initFirebaseAdmin());
+  return { initialized, hasServiceAccountEnv, hasGoogleAppCreds };
+};
+
 /**
  * @param {string[]} tokens
  * @param {{ title: string, body: string, data?: Record<string, string> }} payload
  */
 const sendFcmDataAndNotification = async (tokens, { title, body, data = {} }) => {
   const messaging = getMessaging();
-  if (!messaging || !Array.isArray(tokens) || !tokens.length) return;
+  if (!messaging || !Array.isArray(tokens) || !tokens.length) {
+    return { successCount: 0, failureCount: 0, initialized: Boolean(messaging) };
+  }
 
   const dataPayload = {};
   for (const [k, v] of Object.entries(data)) {
@@ -52,9 +61,24 @@ const sendFcmDataAndNotification = async (tokens, { title, body, data = {} }) =>
     if (result.failureCount > 0) {
       console.warn('[fcm] partial failure', result.failureCount, '/', messages.length);
     }
+    return {
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      initialized: true,
+      responses: result.responses?.map((r) => ({
+        success: Boolean(r.success),
+        error: r.error ? String(r.error.message || r.error) : null,
+      })),
+    };
   } catch (e) {
     console.error('[fcm] sendEach failed:', e.message);
+    return {
+      successCount: 0,
+      failureCount: messages.length,
+      initialized: true,
+      error: String(e.message || e),
+    };
   }
 };
 
-module.exports = { sendFcmDataAndNotification, getMessaging };
+module.exports = { sendFcmDataAndNotification, getMessaging, getFcmInitStatus };

@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const SignupOtp = require('../models/SignupOtp');
 const { protect } = require('../middleware/auth');
+const { getFcmInitStatus, sendFcmDataAndNotification } = require('../services/fcm');
 
 const router = express.Router();
 
@@ -426,6 +427,47 @@ router.post('/fcm/unregister', protect, async (req, res) => {
     }
     await User.updateOne({ _id: req.user._id }, { $pull: { fcmTokens: token } });
     return res.json({ message: 'FCM token removed' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+/** Debug: verify Firebase Admin init + token count for current user */
+router.get('/fcm/status', protect, async (req, res) => {
+  try {
+    const status = getFcmInitStatus();
+    const user = await User.findById(req.user._id).select('email role fcmTokens expoPushTokens');
+    return res.json({
+      firebase: status,
+      user: {
+        id: String(req.user._id),
+        email: user?.email,
+        role: user?.role,
+        fcmTokenCount: Array.isArray(user?.fcmTokens) ? user.fcmTokens.length : 0,
+        expoTokenCount: Array.isArray(user?.expoPushTokens) ? user.expoPushTokens.length : 0,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+/** Debug: send a test push to the logged-in user via FCM */
+router.post('/fcm/test', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('fcmTokens');
+    const tokens = (user?.fcmTokens || []).map((t) => String(t).trim()).filter(Boolean);
+    if (!tokens.length) {
+      return res.status(400).json({ message: 'No fcmTokens saved for this user yet' });
+    }
+    const title = 'Smart Queue FCM test';
+    const body = `Hello ${req.user?.name || ''}`.trim() || 'Hello';
+    const result = await sendFcmDataAndNotification(tokens, {
+      title,
+      body,
+      data: { type: 'fcm_test', t: String(Date.now()) },
+    });
+    return res.json({ message: 'Sent', result });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
